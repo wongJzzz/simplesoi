@@ -19,6 +19,9 @@ email: contracts@esri.com
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.Map;
 
 import com.esri.arcgis.interop.AutomationException;
@@ -28,14 +31,9 @@ import com.esri.arcgis.server.IServerObject;
 import com.esri.arcgis.server.IServerObjectExtension;
 import com.esri.arcgis.server.IServerObjectHelper;
 import com.esri.arcgis.server.SOIHelper;
+import com.esri.arcgis.server.json.JSONArray;
 import com.esri.arcgis.server.json.JSONObject;
-import com.esri.arcgis.system.ILog;
-import com.esri.arcgis.system.IRESTRequestHandler;
-import com.esri.arcgis.system.IRequestHandler;
-import com.esri.arcgis.system.IRequestHandler2;
-import com.esri.arcgis.system.IWebRequestHandler;
-import com.esri.arcgis.system.IWebRequestHandlerProxy;
-import com.esri.arcgis.system.ServerUtilities;
+import com.esri.arcgis.system.*;
 
 /*
  * For an SOE to act as in interceptor, it needs to implement all request handler interfaces
@@ -55,7 +53,7 @@ import com.esri.arcgis.system.ServerUtilities;
 
 @ServerObjectExtProperties(
         displayName = "Java Simple SOI",
-        description = "Java Simple SOI",
+        description = "intercept Map Export API & Layer Query API",
         interceptor = true,
         servicetype =  "MapService" ,
 		properties = "" ,
@@ -153,19 +151,65 @@ public class JavaSimpleMapSOI
 		serverLog.addMessage(3, 200, "Request logged in SampleSOI. User: " + getLoggedInUserName() + ", Operation: " + operationName + ", Operation Input: " + processOperationInput(operationInput));
 
 		String loginUser = "current user=" + ServerUtilities.getServerUserInfo().getName();
-		String userAction = "Capabilities= " + capabilities + ", resourceName= " + resourceName
-				+ ", operationName= " + operationName + ", operationInput= " + operationInput
-				+ ", outputFormat= " + outputFormat + ", requestProperties= " + requestProperties;
 		serverLog.addMessage(3, 200, loginUser);
-		serverLog.addMessage(3, 200, userAction);
+		serverLog.addMessage(3, 200, "capabilities - " + capabilities);
+		serverLog.addMessage(3, 200, "resourceName - " + resourceName);
+		serverLog.addMessage(3, 200, "operationName - " + operationName);
+		serverLog.addMessage(3, 200, "operationInput - " + operationInput);
+		serverLog.addMessage(3, 200, "outputFormat - " + outputFormat);
+		serverLog.addMessage(3, 200, "requestProperties - " + requestProperties);
 		/*
 		 * Add code to manipulate REST requests here
 		 */
 
 		// Find the correct delegate to forward the request too
 		IRESTRequestHandler restRequestHandler = soiHelper.findRestRequestHandlerDelegate(so);
+
+
+
 		if (restRequestHandler != null) {
 			// Return the response
+			if (operationName !=null && operationName.equals("query") && resourceName.equals("layers/0") && outputFormat.equals("json")) {
+				serverLog.addMessage(3,200,"catch query");
+				byte[] originalResponse = restRequestHandler.handleRESTRequest(
+						capabilities, resourceName, operationName, operationInput, outputFormat, requestProperties, responseProperties);
+				String responseString = new String(originalResponse, "utf-8");
+				JSONObject resultJSON = new JSONObject(responseString);
+				JSONArray features = resultJSON.optJSONArray("features");
+				Map<String, String> _IdCode = new HashMap<>();
+				if(features != null){
+					for (int i = 0; i < features.length(); i++) {
+						JSONObject feature = features.optJSONObject(i);
+						if(feature != null){
+							JSONObject attributes = feature.getJSONObject("attributes");
+							String ObjectID = attributes.optString("OBJECTID");
+							String citycode = attributes.optString("CODE_1");
+							_IdCode.put(ObjectID, citycode);
+						}
+					}
+					Map<String, String> IdName;
+					PgSOI pgSOI = null;
+					try {
+						pgSOI = new PgSOI(_IdCode);
+					} catch (SQLException throwables) {
+						throwables.printStackTrace();
+					}
+					IdName = pgSOI._IdName;
+					for (int i = 0; i < features.length(); i++) {
+						JSONObject feature = features.optJSONObject(i);
+						if(feature != null){
+							JSONObject attributes = feature.getJSONObject("attributes");
+							String ObjectID = attributes.optString("OBJECTID");
+							String cityname = IdName.get(ObjectID);
+							attributes.put("CityName", cityname);
+						}
+					}
+					String modifiedResponse = resultJSON.toString();
+					return modifiedResponse.getBytes("utf-8");
+				}
+
+			}
+
 			if (operationName !=null && !operationName.isEmpty())  {
 				JSONObject operationInputJson = new JSONObject(operationInput);
 				operationInputJson.put("layers", "hide:0");//This statement shows only the first layer
@@ -175,6 +219,7 @@ public class JavaSimpleMapSOI
 						capabilities, resourceName, operationName, modifiedOperationInput,
 						outputFormat, requestProperties, responseProperties);
 			}
+
 			return restRequestHandler.handleRESTRequest(capabilities, resourceName, operationName, operationInput,
 					outputFormat, requestProperties, responseProperties);
 		}
