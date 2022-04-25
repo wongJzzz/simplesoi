@@ -161,6 +161,8 @@ public class JavaSimpleMapSOI
 		/*
 		 * Add code to manipulate REST requests here
 		 */
+		JSONObject operationParametersJson = new JSONObject(operationInput);
+		
 
 		// Find the correct delegate to forward the request too
 		IRESTRequestHandler restRequestHandler = soiHelper.findRestRequestHandlerDelegate(so);
